@@ -40,5 +40,14 @@ $settings->add(new admin_setting_configselect('report_learneractivity/studentrol
                 $rolesarray));
 
 
+$extrafields = $DB->get_records('user_info_field');
+//$extrafields =   $userfieldsapi = \core_user\fields::for_identity(\context_system::instance(), false)->with_userpic();
+$extrafieldsarray = [];
+foreach ($extrafields as $field) {
+    $extrafieldsarray[$field->shortname] = $field->name;
+}
 
+$settings->add(new admin_setting_configselect('report_learneractivity/teamcustomfield', get_string('teamcustomfield', 'report_learneractivity'),
+                get_string('teamcustomfield_help', 'report_learneractivity'), NULL,
+                $extrafieldsarray));
 

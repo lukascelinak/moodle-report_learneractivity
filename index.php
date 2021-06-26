@@ -22,8 +22,12 @@
  * @copyright   2021 Lukas Celinak <lukascelinak@gmail.com>
  * @license     https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
+
+use core\report_helper;
+
 require(__DIR__ . '/../../config.php');
 require_once($CFG->libdir . '/adminlib.php');
+require_once("{$CFG->libdir}/completionlib.php");
 
 require_login();
 $context = context_system::instance();
