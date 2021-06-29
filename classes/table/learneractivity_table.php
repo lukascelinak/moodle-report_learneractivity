@@ -36,6 +36,7 @@ defined('MOODLE_INTERNAL') || die;
 global $CFG;
 
 require_once($CFG->dirroot . '/grade/lib.php');
+require_once($CFG->dirroot . '/grade/report/lib.php');
 require_once($CFG->libdir . '/tablelib.php');
 require_once($CFG->dirroot . '/user/lib.php');
 require_once("{$CFG->libdir}/completionlib.php");
@@ -76,8 +77,15 @@ class learneractivity_table extends \table_sql {
         $this->groups = groups_get_all_groups($this->course->id, 0, 0, 'g.*', true);
         // Retrieve course_module data for all modules in the course
         $this->activities = $this->completion->get_activities();
-
+        $this->gtree = new \grade_tree($this->course->id, true);
         $this->modinfo = get_fast_modinfo($this->course);
+        $this->allgradeitems = $this->get_allgradeitems();
+        $sqlitems = "SELECT gi.*,cm.section FROM {grade_items} gi "
+                . "INNER JOIN {modules} m ON gi.itemmodule=m.name "
+                . "LEFT JOIN {course_modules} cm ON cm.module = m.id AND cm.instance = gi.iteminstance "
+                . "WHERE gi.courseid=:courseid AND gi.itemtype LIKE \"mod\" ORDER BY cm.section ASC ";
+        $params = ['courseid' => $this->course->id];
+        $this->moduleitems = $DB->get_records_sql($sqlitems, $params);
     }
 
     /**
@@ -88,6 +96,7 @@ class learneractivity_table extends \table_sql {
      * @param string $downloadhelpbutton
      */
     public function out($pagesize, $useinitialsbar, $downloadhelpbutton = '') {
+        global $DB;
         $this->downloadable = true;
         $this->set_attribute('class', 'table-bordered');
         // Define the headers and columns.
@@ -118,11 +127,14 @@ class learneractivity_table extends \table_sql {
         $this->no_sorting("suspended");
         $extrafields = [];
 
-        foreach ($this->activities as $moduleitem) {
-            $extrafields[] = "activitid_" . $moduleitem->id;
-            $headers[] = $this->modinfo->cms[$moduleitem->id]->get_formatted_name();
-            $columns[] = "activitid_" . $moduleitem->id;
-            $this->no_sorting("activitid_" . $moduleitem->id);
+        foreach ($this->moduleitems as $moduleitem) {
+            $cm = get_coursemodule_from_instance($moduleitem->itemmodule, $moduleitem->iteminstance);
+            $category = $DB->get_record('course_sections', array('id' => $moduleitem->section));
+            $extrafields[] = "activitid_" . $cm->id;
+            $categoryname = $this->is_downloading() ? $category->name . ": " : "<span class=\"badge badge-primary\">{$category->name}</span><br/>";
+            $headers[] = $categoryname . $this->modinfo->cms[$cm->id]->get_formatted_name();
+            $columns[] = "activitid_" . $cm->id;
+            $this->no_sorting("activitid_" . $cm->id);
         }
 
         $this->define_columns($columns);
@@ -206,7 +218,6 @@ class learneractivity_table extends \table_sql {
      * @return string
      */
     public function col_suspended($data) {
-        global $DB;
         $context = \context_course::instance($this->course->id);
         if (is_enrolled($context, $data->id, '', true)) {
             return get_string('no');
@@ -216,13 +227,17 @@ class learneractivity_table extends \table_sql {
     }
 
     /**
-     * Generate the fullname column.
+     * Generate the last access column.
      *
      * @param \stdClass $data
      * @return string
      */
     public function col_lastaccess($data) {
-        return userdate($data->lastaccess, get_string('strftimedatetimeshort'));
+        if ($data->lastaccess) {
+            return userdate($data->lastaccess, get_string('strftimedatetimeshort'));
+        }
+
+        return get_string('never');
     }
 
     /**
@@ -316,33 +331,58 @@ class learneractivity_table extends \table_sql {
 
         $this->rawdata = [];
         foreach ($rawdata as $user) {
-            foreach ($this->activities as $moduleitem) {
-                $completiondata = $this->completion->get_data($moduleitem, false, $user->id);
-                if ($completiondata->completionstate == 0 && $this->user_viewed_activity($moduleitem->id, $user->id)) {
-                    $completiontype = 'inprogress';
-                } elseif ($completiondata->completionstate > 0) {
-                    switch ($completiondata->completionstate) {
-                        case COMPLETION_INCOMPLETE :
-                            $completiontype = 'notcompleted';
-                            break;
-                        case COMPLETION_COMPLETE :
-                            $completiontype = 'completed';
-                            break;
-                        case COMPLETION_COMPLETE_PASS :
-                            $completiontype = 'completed';
-                            break;
-                        case COMPLETION_COMPLETE_FAIL :
-                            $completiontype = 'notcompleted';
-                            break;
-                    }
-                } else {
-                    $completiontype = null;
+            foreach ($this->moduleitems as $moduleitem) {
+                $cm = get_coursemodule_from_instance($moduleitem->itemmodule, $moduleitem->iteminstance);
+                switch ($moduleitem->itemmodule) {
+                    case 'quiz':
+                        $sql = "SELECT a.*
+                                FROM {quiz_attempts} a
+                                WHERE a.quiz=:quizid AND a.userid=:userid ORDER BY a.id ASC LIMIT 1";
+                        $params = ['quizid' => $moduleitem->iteminstance, 'userid' => $user->id];
+                        if ($quizgrade = $DB->get_record_sql($sql, $params)) {
+                            if (is_null($quizgrade->sumgrades)) {
+                                $completionstate = get_string('inprogress', 'report_learneractivity');
+                            } else {
+                                $completionstate = get_string('completed', 'report_learneractivity');
+                            }
+                        } else {
+                            $completionstate = '';
+                        }
+                        break;
+
+                    default:
+                        $completionstate = '';
+                        break;
                 }
 
-
-                $completionstate = $completiontype ? get_string($completiontype, 'report_learneractivity') : "-";
-
-                $fieldname = "activitid_" . $moduleitem->id;
+//            
+//            foreach ($this->activities as $moduleitem) {
+//                $completiondata = $this->completion->get_data($moduleitem, false, $user->id);
+//                if ($completiondata->completionstate == 0 && $this->user_viewed_activity($moduleitem->id, $user->id)) {
+//                    $completiontype = 'inprogress';
+//                } elseif ($completiondata->completionstate > 0) {
+//                    switch ($completiondata->completionstate) {
+//                        case COMPLETION_INCOMPLETE :
+//                            $completiontype = 'notcompleted';
+//                            break;
+//                        case COMPLETION_COMPLETE :
+//                            $completiontype = 'completed';
+//                            break;
+//                        case COMPLETION_COMPLETE_PASS :
+//                            $completiontype = 'completed';
+//                            break;
+//                        case COMPLETION_COMPLETE_FAIL :
+//                            $completiontype = 'notcompleted';
+//                            break;
+//                    }
+//                } else {
+//                    $completiontype = null;
+//                }
+//
+//
+//                $completionstate = $completiontype ? get_string($completiontype, 'report_learneractivity') : "-";
+//
+                $fieldname = "activitid_" . $cm->id;
 
                 $user->$fieldname = $completionstate;
 
@@ -381,17 +421,23 @@ class learneractivity_table extends \table_sql {
      */
     public function count_users() {
         global $DB;
-        $sqlstart = "SELECT COUNT(u.id) ";
+        $sqlstart = "SELECT u.id,COUNT(u.id) OVER () AS total ";
         $sqlfrom = "FROM {user} u ";
-        $sqlinner = "INNER JOIN {role_assignments} ra ON u.id = ra.userid AND ra.roleid =5 ";
+        $sqlinner = "INNER JOIN {role_assignments} ra ON u.id = ra.userid AND ra.roleid =:studentrole ";
         $sqlinner .= "LEFT JOIN {context} ct ON ct.id = ra.contextid ";
         $sqlinner .= "INNER JOIN {course} c ON c.id = ct.instanceid AND c.id =:courseid ";
-        $sqlinner .= "INNER JOIN {user_enrolments} ue ON ue.id = u.id LEFT JOIN {enrol} e ON ue.enrolid = e.id AND e.courseid = c.id ";
+        $sqlinner .= "INNER JOIN {user_enrolments} ue ON ue.userid = u.id LEFT JOIN {enrol} e ON ue.enrolid = e.id AND e.courseid = c.id ";
         $sqlwhere = "WHERE c.id =:courseid2 ";
-        $sql = $sqlstart . $sqlfrom . $sqlinner . $sqlwhere;
+        $sqlgroup = "GROUP BY u.id ";
+        $sql = $sqlstart . $sqlfrom . $sqlinner . $sqlwhere . $sqlgroup;
+        $params['studentrole'] = get_config('report_learneractivity', 'studentrole');
         $params['courseid'] = $this->course->id;
         $params['courseid2'] = $this->course->id;
-        return $DB->count_records_sql($sql, $params);
+        if ($DB->get_records_sql($sql, $params, 1)) {
+            return array_column($DB->get_records_sql($sql, $params, 0, 1), 'total')[0];
+        } else {
+            return 0;
+        }
     }
 
     /**
@@ -406,7 +452,7 @@ class learneractivity_table extends \table_sql {
         $sqlinner = "INNER JOIN {role_assignments} ra ON u.id = ra.userid AND ra.roleid =:studentrole ";
         $sqlinner .= "LEFT JOIN {context} ct ON ct.id = ra.contextid ";
         $sqlinner .= "INNER JOIN {course} c ON c.id = ct.instanceid AND c.id =:courseid ";
-        $sqlinner .= "INNER JOIN {user_enrolments} ue ON ue.id = u.id LEFT JOIN {enrol} e ON ue.enrolid = e.id AND e.courseid = c.id ";
+        $sqlinner .= "INNER JOIN {user_enrolments} ue ON ue.userid = u.id LEFT JOIN {enrol} e ON ue.enrolid = e.id AND e.courseid = c.id ";
 
         $sqlwhere = "WHERE c.id =:courseid2 ";
         $sqlgroup = "GROUP BY u.id ";
@@ -431,6 +477,22 @@ class learneractivity_table extends \table_sql {
         } else {
             return false;
         }
+    }
+
+    /**
+     * Load all grade items.
+     */
+    protected function get_allgradeitems() {
+        if (!empty($this->allgradeitems)) {
+            return $this->allgradeitems;
+        }
+        $allgradeitems = \grade_item::fetch_all(array('courseid' => $this->course->id));
+        // But hang on - don't include ones which are set to not show the grade at all.
+        $this->allgradeitems = array_filter($allgradeitems, function($item) {
+            return $item->gradetype != GRADE_TYPE_NONE;
+        });
+
+        return $this->allgradeitems;
     }
 
 }
