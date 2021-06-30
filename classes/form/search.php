@@ -1,4 +1,5 @@
 <?php
+
 // This file is part of Moodle - http://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
@@ -44,17 +45,32 @@ class search extends \moodleform {
      * @return void
      */
     public function definition() {
-        global $DB;
+        global $DB, $CFG;
         $mform = $this->_form;
-
+        $this->gradebookroles = $CFG->gradebookroles;
         //show required config fields for report
         $mform->addElement('header', 'heading', get_string('pluginname', 'report_learneractivity'));
 
         $courses = $DB->get_records_menu('course', array('visible' => 1), '', 'id, fullname');
-
+        array_unshift($courses,get_string('selectcourse', 'report_learneractivity'));
         $mform->addElement('autocomplete', 'course', get_string('course'), $courses);
         $mform->addRule('course', get_string('course'), 'required');
-        
+        if ($courseid = $mform->optional_param('course', null, PARAM_RAW)) {
+            $institutionarray = [0 => get_string('allparticipants')];
+            $instituions = $this->get_institutions($courseid);
+            foreach ($instituions as $instituion) {
+                $institutionarray["$instituion->institution"] = $instituion->institution;
+            }
+            $mform->addElement('autocomplete', 'institution', get_string('institution'), $institutionarray);
+
+            $coursegroups = groups_get_all_groups($courseid);
+            $coursegrouparray = [0 => get_string('allparticipants')];
+            foreach ($coursegroups as $coursegroup) {
+                $coursegrouparray[$coursegroup->id] = $coursegroup->name;
+            }
+            $mform->addElement('autocomplete', 'group', get_string('group'), $coursegrouparray);
+        }
+
         $this->add_action_buttons(false, get_string('search'));
     }
 
@@ -64,6 +80,27 @@ class search extends \moodleform {
             $errors['course'] = get_string("coursesincolumnshelp", "report_learneractivity");
         }
         return $errors;
+    }
+
+    public function get_institutions($courseid) {
+        global $DB;
+        $this->context = \context_course::instance($courseid);
+        list($relatedctxsql, $relatedctxparams) = $DB->get_in_or_equal($this->context->get_parent_context_ids(true), SQL_PARAMS_NAMED, 'relatedctx');
+        $sqlstart = "SELECT ";
+        $sqlwhat = "u.id, u.institution ";
+        $sqlfrom = "FROM {user} u ";
+        $sqlwhere = "";
+        $sqlgroup = "GROUP BY u.institution ";
+
+        $sqlinner = " JOIN (
+                           SELECT DISTINCT ra.userid
+                             FROM {role_assignments} ra
+                            WHERE ra.roleid IN ($this->gradebookroles)
+                              AND ra.contextid $relatedctxsql
+                       ) rainner ON rainner.userid = u.id ";
+        $sqlorder = "ORDER BY u.institution ";
+        $sql = $sqlstart . $sqlwhat . $sqlfrom . $sqlinner . $sqlwhere . $sqlgroup . $sqlorder;
+        return $DB->get_records_sql($sql, $relatedctxparams);
     }
 
 }

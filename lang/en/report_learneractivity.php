@@ -32,6 +32,7 @@ $string['eventreportviewed'] = 'Learner Activity Report viewed';
 $string['settingsheader'] = 'Learner Activity Report settings';
 $string['settingsheaderdesc'] = 'Learner Activity Report settings';
 $string['studentrole'] = 'Student role';
+$string['selectcourse'] = 'Select course first';
 $string['studentrole_help'] = 'Select preddefined student role for listing students in report.';
 $string['userstotal'] = '{$a} users loaded.';
 $string['coursehelp'] = 'Course filter is required.';

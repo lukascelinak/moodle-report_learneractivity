@@ -26,6 +26,6 @@ defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'report_learneractivity';
 $plugin->release = '3.10.0';
-$plugin->version = 2021062900;
+$plugin->version = 2021062901;
 $plugin->requires = 2019052000;
 $plugin->maturity = MATURITY_ALPHA;

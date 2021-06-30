@@ -1,4 +1,5 @@
 <?php
+
 // This file is part of Moodle - https://moodle.org/
 //
 // Moodle is free software: you can redistribute it and/or modify
@@ -22,7 +23,6 @@
  * @copyright   2021 Lukas Celinak <lukascelinak@gmail.com>
  * @license     https://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
-
 use core\report_helper;
 
 require(__DIR__ . '/../../config.php');
@@ -59,6 +59,8 @@ if ($cachedata = $cache->get('data')) {
 $data = ($mform->is_submitted() ? $mform->get_data() : fullclone($cachedata));
 if ($data instanceof stdClass) {
     $courseid = !empty($data->course) ? $data->course : null;
+    $group = !empty($data->group) ? $data->group : null;
+    $institution = !empty($data->institution) ? $data->institution : null;
     // Cache form submission so that it is preserved while paging through the report.
     unset($data->submitbutton);
     $cache->set('data', $data);
@@ -79,7 +81,7 @@ if (!$mtable->is_downloading()) {
 }
 
 if ($courseid) {
-    $mtable->init_table($courseid);
+    $mtable->init_table($courseid,$group,$institution);
     ob_start();
     $mtable->out($pagesize, false);
     $mtablehtml = ob_get_contents();

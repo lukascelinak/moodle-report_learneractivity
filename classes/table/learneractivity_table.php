@@ -53,7 +53,7 @@ class learneractivity_table extends \table_sql {
     public $course;
     public $completion;
     public $activities;
-    public $groups;
+    public $group;
 
     /**
      * Sets up the table.
@@ -68,10 +68,16 @@ class learneractivity_table extends \table_sql {
      * @param bool $bulkoperations Is the user allowed to perform bulk operations?
      * @param bool $selectall Has the user selected all users on the page?
      */
-    public function init_table($courseid) {
-        global $DB;
+    public function init_table($courseid, $group = null, $institution = null) {
+        global $DB, $CFG;
         $this->course = $DB->get_record('course', array('id' => $courseid));
         $this->context = \context_course::instance($courseid);
+        if ($group != 0) {
+            $this->group = $group;
+        }
+        if (!empty($institution)) {
+            $this->institution = $institution;
+        }
         // Get criteria for course
         $this->completion = new \completion_info($this->course);
         $this->groups = groups_get_all_groups($this->course->id, 0, 0, 'g.*', true);
@@ -79,6 +85,7 @@ class learneractivity_table extends \table_sql {
         $this->activities = $this->completion->get_activities();
         $this->gtree = new \grade_tree($this->course->id, true);
         $this->modinfo = get_fast_modinfo($this->course);
+        $this->gradebookroles = $CFG->gradebookroles;
         $this->allgradeitems = $this->get_allgradeitems();
         $sqlitems = "SELECT gi.*,cm.section FROM {grade_items} gi "
                 . "INNER JOIN {modules} m ON gi.itemmodule=m.name "
@@ -86,6 +93,7 @@ class learneractivity_table extends \table_sql {
                 . "WHERE gi.courseid=:courseid AND gi.itemtype LIKE \"mod\" ORDER BY cm.section ASC ";
         $params = ['courseid' => $this->course->id];
         $this->moduleitems = $DB->get_records_sql($sqlitems, $params);
+        $this->setup_groups();
     }
 
     /**
@@ -383,10 +391,8 @@ class learneractivity_table extends \table_sql {
 //                $completionstate = $completiontype ? get_string($completiontype, 'report_learneractivity') : "-";
 //
                 $fieldname = "activitid_" . $cm->id;
-
                 $user->$fieldname = $completionstate;
-
-                $customfields = profile_user_record($user->id);
+                $customfields = profile_user_record((int) $user->id);
                 $user = (object) array_merge((array) $user, (array) $customfields);
             }
             $this->rawdata[$user->id] = $user;
@@ -421,23 +427,33 @@ class learneractivity_table extends \table_sql {
      */
     public function count_users() {
         global $DB;
-        $sqlstart = "SELECT u.id,COUNT(u.id) OVER () AS total ";
-        $sqlfrom = "FROM {user} u ";
-        $sqlinner = "INNER JOIN {role_assignments} ra ON u.id = ra.userid AND ra.roleid =:studentrole ";
-        $sqlinner .= "LEFT JOIN {context} ct ON ct.id = ra.contextid ";
-        $sqlinner .= "INNER JOIN {course} c ON c.id = ct.instanceid AND c.id =:courseid ";
-        $sqlinner .= "INNER JOIN {user_enrolments} ue ON ue.userid = u.id LEFT JOIN {enrol} e ON ue.enrolid = e.id AND e.courseid = c.id ";
-        $sqlwhere = "WHERE c.id =:courseid2 ";
-        $sqlgroup = "GROUP BY u.id ";
-        $sql = $sqlstart . $sqlfrom . $sqlinner . $sqlwhere . $sqlgroup;
-        $params['studentrole'] = get_config('report_learneractivity', 'studentrole');
-        $params['courseid'] = $this->course->id;
-        $params['courseid2'] = $this->course->id;
-        if ($DB->get_records_sql($sql, $params, 1)) {
-            return array_column($DB->get_records_sql($sql, $params, 0, 1), 'total')[0];
+
+        if ($this->group > 0) {
+            $groupsql = $this->groupsql;
+            $groupwheresql = $this->groupwheresql;
+            $groupwheresqlparams = $this->groupwheresql_params;
         } else {
-            return 0;
+            $groupsql = "";
+            $groupwheresql = "";
+            $groupwheresqlparams = array();
         }
+        list($relatedctxsql, $relatedctxparams) = $DB->get_in_or_equal($this->context->get_parent_context_ids(true), SQL_PARAMS_NAMED, 'relatedctx');
+
+        $sqlstart = "SELECT COUNT(u.id) ";
+        $sqlfrom = "FROM {user} u ";
+        $sqlinner = " JOIN (
+                           SELECT DISTINCT ra.userid
+                             FROM {role_assignments} ra
+                            WHERE ra.roleid IN ($this->gradebookroles)
+                              AND ra.contextid $relatedctxsql
+                       ) rainner ON rainner.userid = u.id {$groupsql} ";
+        $sqlwhere = "WHERE 1 ";
+        $sqlwhere .= "{$groupwheresql} ";
+        $sqlgroup = "";
+        $sqlwhere .= property_exists($this, "institution") && !empty($this->institution) ? "AND u.institution LIKE \"{$this->institution}\" " : "";
+        $sql = $sqlstart . $sqlfrom . $sqlinner . $sqlwhere . $sqlgroup;
+        $params = array_merge($relatedctxparams, $groupwheresqlparams);
+        return $DB->count_records_sql($sql, $params);
     }
 
     /**
@@ -445,24 +461,36 @@ class learneractivity_table extends \table_sql {
      */
     public function get_users($sort, $start, $size, $courseid) {
         global $DB;
-        $params = [];
+        if ($this->group > 0) {
+            $groupsql = $this->groupsql;
+            $groupwheresql = $this->groupwheresql;
+            $groupwheresqlparams = $this->groupwheresql_params;
+        } else {
+            $groupsql = "";
+            $groupwheresql = "";
+            $groupwheresqlparams = array();
+        }
+
+        //$sqlwhere = property_exists($this, "institution")&&$this->institution > 0 ? "u.institution LIKE \"{$this->institution}\" ":"1 ";
+
+        list($relatedctxsql, $relatedctxparams) = $DB->get_in_or_equal($this->context->get_parent_context_ids(true), SQL_PARAMS_NAMED, 'relatedctx');
         $sqlstart = "SELECT ";
         $sqlwhat = "u.* ";
         $sqlfrom = "FROM {user} u ";
-        $sqlinner = "INNER JOIN {role_assignments} ra ON u.id = ra.userid AND ra.roleid =:studentrole ";
-        $sqlinner .= "LEFT JOIN {context} ct ON ct.id = ra.contextid ";
-        $sqlinner .= "INNER JOIN {course} c ON c.id = ct.instanceid AND c.id =:courseid ";
-        $sqlinner .= "INNER JOIN {user_enrolments} ue ON ue.userid = u.id LEFT JOIN {enrol} e ON ue.enrolid = e.id AND e.courseid = c.id ";
+        $sqlwhere = "WHERE 1 ";
+        $sqlwhere .= "{$groupwheresql} ";
+        $sqlgroup = "";
+        $sqlwhere .= property_exists($this, "institution") && !empty($this->institution) ? "AND u.institution LIKE \"{$this->institution}\" " : "";
 
-        $sqlwhere = "WHERE c.id =:courseid2 ";
-        $sqlgroup = "GROUP BY u.id ";
+        $sqlinner = " JOIN (
+                           SELECT DISTINCT ra.userid
+                             FROM {role_assignments} ra
+                            WHERE ra.roleid IN ($this->gradebookroles)
+                              AND ra.contextid {$relatedctxsql}
+                       ) rainner ON rainner.userid = u.id {$groupsql} ";
         $sqlorder = "ORDER BY {$sort} ";
-
         $sql = $sqlstart . $sqlwhat . $sqlfrom . $sqlinner . $sqlwhere . $sqlgroup . $sqlorder;
-        $params['studentrole'] = get_config('report_learneractivity', 'studentrole');
-        $params['courseid'] = $courseid;
-        $params['courseid2'] = $courseid;
-
+        $params = array_merge($relatedctxparams, $groupwheresqlparams);
         return $DB->get_records_sql($sql, $params, $start, $size);
     }
 
@@ -493,6 +521,21 @@ class learneractivity_table extends \table_sql {
         });
 
         return $this->allgradeitems;
+    }
+
+    /**
+     * Sets up this object's group variables, mainly to restrict the selection of users to display.
+     */
+    protected function setup_groups() {
+        // find out current groups mode         
+        if ($this->group) {
+            if ($group = groups_get_group($this->group)) {
+                $this->currentgroupname = $group->name;
+            }
+            $this->groupsql = " JOIN {groups_members} gm ON gm.userid = u.id ";
+            $this->groupwheresql = " AND gm.groupid = :gr_grpid ";
+            $this->groupwheresql_params = array('gr_grpid' => $this->group);
+        }
     }
 
 }
