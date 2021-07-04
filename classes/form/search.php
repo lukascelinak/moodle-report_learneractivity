@@ -51,7 +51,7 @@ class search extends \moodleform {
         //show required config fields for report
         $mform->addElement('header', 'heading', get_string('pluginname', 'report_learneractivity'));
 
-        $courses = $DB->get_records_menu('course', array('visible' => 1), '', 'id, fullname');
+        $courses = $DB->get_records_menu('course', array(), '', 'id, fullname');
         array_unshift($courses,get_string('selectcourse', 'report_learneractivity'));
         $mform->addElement('autocomplete', 'course', get_string('course'), $courses);
         $mform->addRule('course', get_string('course'), 'required');
