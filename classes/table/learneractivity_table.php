@@ -136,13 +136,15 @@ class learneractivity_table extends \table_sql {
         $extrafields = [];
 
         foreach ($this->moduleitems as $moduleitem) {
-            $cm = get_coursemodule_from_instance($moduleitem->itemmodule, $moduleitem->iteminstance);
+            if($moduleitem->hidden !=1){
+                $cm = get_coursemodule_from_instance($moduleitem->itemmodule, $moduleitem->iteminstance);
             $category = $DB->get_record('course_sections', array('id' => $moduleitem->section));
             $extrafields[] = "activitid_" . $cm->id;
             $categoryname = $this->is_downloading() ? $category->name . ": " : "<span class=\"badge badge-primary\">{$category->name}</span><br/>";
             $headers[] = $categoryname . $this->modinfo->cms[$cm->id]->get_formatted_name();
             $columns[] = "activitid_" . $cm->id;
-            $this->no_sorting("activitid_" . $cm->id);
+            $this->no_sorting("activitid_" . $cm->id);}
+            
         }
 
         $this->define_columns($columns);
@@ -340,6 +342,7 @@ class learneractivity_table extends \table_sql {
         $this->rawdata = [];
         foreach ($rawdata as $user) {
             foreach ($this->moduleitems as $moduleitem) {
+                if($moduleitem->hidden !=1){
                 $cm = get_coursemodule_from_instance($moduleitem->itemmodule, $moduleitem->iteminstance);
                 switch ($moduleitem->itemmodule) {
                     case 'quiz':
@@ -357,7 +360,36 @@ class learneractivity_table extends \table_sql {
                             $completionstate = '';
                         }
                         break;
+                        case 'assign':
+                        $sql = "SELECT s.*,g.grade,g.grader,g.timecreated as gradecreated,g.timemodified as grademodified 
+                                FROM {assign_submission} s
+                                LEFT JOIN {assign_grades} g ON g.assignment=s.assignment AND g.userid = s.userid
+                                WHERE s.assignment=:assignmentid AND s.userid=:userid AND s.latest=1 ORDER BY s.id ASC LIMIT 1";
+                        $params = ['assignmentid' => $moduleitem->iteminstance, 'userid' => $user->id];
+                        if ($quizgrade = $DB->get_record_sql($sql, $params)) {
+                            if (is_null($quizgrade->grade)) {
+                                switch ($quizgrade->status) {
+                                    case "new":
+                                         $completionstate = get_string('inprogress', 'report_learneractivity');
 
+                                        break;
+                                    case "submitted":
+                                         $completionstate = get_string('readyforgrade', 'report_learneractivity');
+
+                                        break;
+
+                                    default:
+                                        "-";
+                                        break;
+                                }
+                               
+                            } else {
+                                $completionstate = get_string('completed', 'report_learneractivity');
+                            }
+                        } else {
+                            $completionstate = '';
+                        }
+                        break;
                     default:
                         $completionstate = '';
                         break;
@@ -391,11 +423,13 @@ class learneractivity_table extends \table_sql {
 //                $completionstate = $completiontype ? get_string($completiontype, 'report_learneractivity') : "-";
 //
                 $fieldname = "activitid_" . $cm->id;
-                $user->$fieldname = $completionstate;
-                $customfields = profile_user_record((int) $user->id);
-                $user = (object) array_merge((array) $user, (array) $customfields);
+                $user->$fieldname = $completionstate;}
+                
             }
+            $customfields = profile_user_record((int) $user->id);
+            $user = (object) array_merge((array) $user, (array) $customfields);
             $this->rawdata[$user->id] = $user;
+            
         }
 
         // Set initial bars.

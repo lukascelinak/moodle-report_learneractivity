@@ -44,3 +44,4 @@ $string['notstarted'] = 'Not started';
 $string['notcompleted'] = 'Not completed';
 $string['notavailable'] = 'N/A';
 $string['inprogress'] = 'In progress';
+$string['readyforgrade'] = 'Ready for grading';
